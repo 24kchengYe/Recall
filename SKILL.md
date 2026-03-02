@@ -323,10 +323,11 @@ Parse additional arguments after `list`:
      已在 Windows Terminal 中打开新标签页，位于: {originalProject}
 
      请在新标签页中执行：
-     set CLAUDECODE= && claude --resume {sessionId}
+     Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue; claude --resume {sessionId}
      ```
    - Note: `wt -w 0` targets the current WT window; `new-tab -d` sets the working directory
-   - The new tab inherits the default profile (usually PowerShell or CMD)
+   - The new tab inherits the default profile (usually PowerShell). The command above uses PowerShell syntax.
+   - If the user's default profile is CMD, use instead: `set CLAUDECODE= && claude --resume {sessionId}`
    - **Fallback path**: `$LOCALAPPDATA/Microsoft/WindowsApps/wt.exe` (standard install location for Windows Store apps)
 
    **Method: 新终端窗口** (standalone Git Bash):
