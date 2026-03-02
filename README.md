@@ -1,48 +1,59 @@
 # Recall — Cross-Project Session Manager for Claude Code
 
-> **One command to manage all your Claude Code conversations, across every project.**
+> **Cross-project memory and session management — without sacrificing Claude Code's security model.**
 
-## The Problem
+## Why Recall?
 
-Claude Code stores conversation history **per project directory**. Each project has its own isolated session index under `~/.claude/projects/<encoded-project-path>/`. This means:
+There are two extremes in AI coding assistants today:
+
+**OpenClaw** gives you full-computer autonomy — persistent memory across days, browser automation, 700+ skills, 24/7 background agents. But it runs with **elevated system permissions, no sandbox, and autonomous command execution**. Cisco's AI security team found community skills performing [data exfiltration without user awareness](https://www.unite.ai/openclaw-vs-claude-code-remote-control-agents/). As one developer put it: *"OpenClaw is basically Claude Code without the corporate safety guardrails."*
+
+**Claude Code** takes the opposite approach — sandboxed execution, human approval for critical operations, project-scoped isolation. Secure by design. But this means **conversations are locked to individual project directories**. You can't see, search, or resume sessions from other projects. Every project is an island.
+
+**Recall bridges this gap.** It adds cross-project session management, persistent organization, and long-term memory — all while keeping Claude Code's permission model and security guarantees intact. No elevated permissions, no background processes, no autonomous execution. Just a lightweight index layer on top of Claude Code's native storage.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│              Security ◄──────────────► Capability           │
+│                                                             │
+│  Claude Code          Recall              OpenClaw          │
+│  (project-scoped)     (cross-project)     (full-computer)   │
+│  ■■■■■■■■■■          ■■■■■■■■■           ■■■■              │
+│  Security             Security             Security          │
+│  ■■■■                ■■■■■■■■             ■■■■■■■■■■        │
+│  Memory scope         Memory scope         Memory scope      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## The Problem Recall Solves
+
+Claude Code stores conversation history **per project directory** (`~/.claude/projects/<path>/`). This means:
 
 - Sessions from **Project A are invisible** when you're working in **Project B**
-- You cannot browse, search, or resume conversations across projects
-- Built-in `/resume` only shows sessions from the **current** project directory
-- There is no way to organize conversations by topic — they are locked to whichever directory you happened to open
+- Built-in `/resume` only shows sessions from the **current** directory
+- No way to organize conversations by topic — they're locked to whichever folder you opened
+- No cross-project knowledge transfer between related conversations
+- No central place to find "that conversation from last week"
 
-This is true whether you use VS Code, JetBrains, Cursor, Windsurf, or the terminal CLI. It's a fundamental architectural limitation.
-
-### "But Claude Code can read files from other directories..."
-
-Yes — Claude Code's agent can read, write, and search files anywhere on your machine. **But that's file access, not session management.** The conversation history itself (who said what, tool calls, context windows) is stored in `.jsonl` files tied to a specific project. There is no built-in mechanism to:
-
-- **Discover** what conversations happened in other projects
-- **Load past conversation content** as context reference in a new session
-- **Categorize** conversations by topic (research vs. coding vs. writing)
-- **Search** across all your conversations by keyword
-- **Resume** a conversation that lives in a different project directory
-
-Recall fills this gap.
+This is true across VS Code, JetBrains, Cursor, Windsurf, and terminal CLI.
 
 ## What Recall Does
 
 Recall creates a **centralized session index** — a management layer that maps to original session files while keeping backup copies organized by user-defined categories.
 
 ```
-D:\claude-sessions\               ← Central directory (configurable)
-├── _config.json                   ← Categories & settings
+~/claude-sessions/                ← Central directory (configurable)
+├── _config.json                  ← Categories & settings
 ├── 论文/
-│   ├── BSAS论文修改_meta.json     ← Metadata + mapping to original
-│   └── BSAS论文修改.jsonl         ← Full session backup
+│   ├── BSAS论文修改_meta.json    ← Metadata + mapping to original
+│   └── BSAS论文修改.jsonl        ← Full session backup
 ├── 代码/
 │   ├── WebApp重构_meta.json
 │   └── WebApp重构.jsonl
-├── 学习/
-└── ...
+└── 学习/
 ```
 
-**Key design**: The central directory is an **index layer**, not a replacement for Claude Code's native storage. Recall copies sessions as backups and maintains bidirectional metadata links to the originals.
+**Key design**: Recall is a **read-mostly index layer**, not a replacement for Claude Code's native storage. It preserves Claude Code's security model — no elevated permissions, no background processes, no autonomous execution.
 
 ## Commands
 
@@ -66,19 +77,19 @@ D:\claude-sessions\               ← Central directory (configurable)
 ### Save & Organize
 Save any conversation to a central location with a custom name and category. Default categories: 学习, 生活, 代码, 算法, 论文, 工作, 杂项 — fully customizable.
 
-**Auto-update**: If you save a session that was previously saved, Recall automatically updates the backup without asking — no need to re-select name or category. Just `/recall save` again whenever you want a fresh snapshot.
+**Auto-update**: Save a session once, then `/recall save` again anytime for a fresh snapshot — no re-selection needed. Recall detects the existing backup by session ID and silently updates it.
 
-**Filesystem-first session detection**: Recall identifies the current session by checking which `.jsonl` file was most recently modified on disk, not by relying on `sessions-index.json` (which can be stale). This ensures accurate detection even when Claude Code hasn't updated its index.
+**Filesystem-first detection**: Recall identifies the current session by filesystem modification time, not `sessions-index.json` (which can be stale). This ensures accurate detection even when Claude Code hasn't updated its own index.
 
 ### Cross-Project Context Loading (`/recall load`)
 The killer feature. Load content from a past conversation into your **current** session as reference context. Two modes:
 - **Brief**: User questions + assistant text answers only
 - **Detailed**: Includes tool usage summaries (which files were edited, what commands ran)
 
-This enables cross-project knowledge transfer — discuss an algorithm in Project A, then load that context while working in Project B.
+This enables cross-project knowledge transfer — discuss an algorithm in Project A, then load that context while working in Project B. Like OpenClaw's persistent memory, but on-demand and without background token consumption.
 
 ### Interactive Browse (`/recall browse`)
-Visual, clickable hierarchical navigation designed for managing large numbers of sessions:
+Visual, clickable hierarchical navigation designed for hundreds of sessions:
 1. **Layer 1**: Category overview (with session counts)
 2. **Layer 2**: Session list within a category (paginated, 3 per page)
 3. **Layer 3**: Session detail + executable actions (load, resume, rename, move)
@@ -89,16 +100,33 @@ Visual, clickable hierarchical navigation designed for managing large numbers of
 - **Stats**: Overview of total sessions, messages, per-category counts, most active category, largest session
 
 ### Resume from Anywhere
-Browse your central index, select a session, and Recall helps you resume it — even if it's from a different project:
+Select a session from any project, and Recall handles the rest:
 
 - **Same project**: Shows the `claude --resume` command directly
-- **Different project**: Offers to open a **new VSCode window** or **new terminal** at the target project directory, then provides the resume command to paste
-- **Original deleted**: Restores from backup automatically, then provides the resume command
+- **Different project**: Opens a **new VSCode window** or **new terminal** at the target project, with the resume command ready to paste
+- **Original deleted**: Restores from backup first, then provides the resume command
 
-No more manually hunting for which directory a conversation lives in.
+No more hunting through directories to find where a conversation lives.
 
 ### Bidirectional Rename
-When you rename a session in Recall, it updates **both** the central index and the original project's `sessions-index.json`. No desync.
+When you rename a session in Recall, it updates **both** the central index and the original project's `sessions-index.json`. No desync between what Recall shows and what `/resume` shows.
+
+## Recall vs. OpenClaw vs. Built-in
+
+| Capability | Built-in `/resume` | Recall | OpenClaw |
+|---|---|---|---|
+| Cross-project sessions | No | Yes | Yes |
+| Organize by category | No | Yes | Partial |
+| Search all conversations | No | Yes | Yes |
+| Load past context | No | Yes | Yes (persistent) |
+| Resume from any directory | No | Yes | Yes |
+| Central backup | No | Yes | Yes |
+| Sandboxed execution | Yes | Yes | **No** |
+| Human approval required | Yes | Yes | **No** |
+| No background processes | Yes | Yes | **No** |
+| No elevated permissions | Yes | Yes | **No** |
+| Works offline | Yes | Yes | Partial |
+| Zero extra API cost | Yes | Yes | **No** (24/7 tokens) |
 
 ## Installation
 
@@ -126,7 +154,7 @@ git clone https://github.com/24kchengYe/recall.git %USERPROFILE%\.claude\skills\
 ## Configuration
 
 On first `/recall save`, Recall initializes:
-- **Storage path**: Default `D:\claude-sessions\` — you'll be prompted to confirm or customize
+- **Storage path**: Default `~/claude-sessions/` — you'll be prompted to confirm or customize
 - **Categories**: Default set provided, fully customizable via `/recall manage`
 
 All settings stored in `<basePath>/_config.json`.
@@ -137,26 +165,11 @@ For those curious about the internals:
 
 - Each project maps to a directory: `~/.claude/projects/<encoded-path>/`
 - Sessions are stored as `.jsonl` files (one JSON object per line)
-- A `sessions-index.json` per project tracks session metadata
+- A `sessions-index.json` per project tracks session metadata (but is often stale — not all sessions are indexed)
 - Message types include: `user`, `assistant`, `system`, `progress`, and more
 - Context compression creates `compact_boundary` markers in long sessions
 
-Recall reads these native files and builds an index on top of them — it doesn't modify or replace Claude Code's storage, just adds a cross-project management layer.
-
-**Important finding**: `sessions-index.json` is **not always up to date**. Claude Code uses incremental updates — it adds entries on session creation and rename, but does NOT rebuild the full index. Many sessions may exist as `.jsonl` files on disk without having an entry in the index. Recall handles this by using filesystem modification times as the primary session detection method.
-
-## Recall vs. Built-in Commands
-
-| Capability | Built-in `/resume` | Recall |
-|---|---|---|
-| See sessions from other projects | No | Yes |
-| Organize by topic/category | No | Yes |
-| Search across all conversations | No | Yes |
-| Load past conversation as context | No | Yes |
-| Resume from any directory | No | Yes |
-| Rename with bidirectional sync | No | Yes |
-| Central backup of all sessions | No | Yes |
-| Statistics & overview | No | Yes |
+Recall reads these native files and builds an index on top of them — it doesn't replace Claude Code's storage, just adds a cross-project management layer. When `sessions-index.json` is stale, Recall falls back to filesystem modification times for reliable session detection.
 
 ## License
 
