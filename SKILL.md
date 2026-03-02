@@ -280,13 +280,15 @@ Parse additional arguments after `list`:
    **Option A — VSCode new window** (recommended for VSCode users):
    - Run via Bash: `code "{originalProject}"`
    - This opens a NEW VSCode window at the target project
-   - Display to user:
+   - Display to user (PowerShell commands for the new window's terminal):
      ```
      已在 VSCode 中打开项目: {originalProject}
 
-     请在新窗口的终端中执行：
+     请在新窗口的终端中执行（两行都要复制）：
+     Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue
      claude --resume {sessionId}
      ```
+   - **Why `Remove-Item Env:CLAUDECODE`**: VSCode new windows inherit env vars from the parent. If the parent had a Claude Code session running, `CLAUDECODE` env var is set, causing "cannot launch inside another session" error. Clearing it fixes this.
 
    **Option B — New terminal window**:
    - Run via Bash: `start "" "C:\Program Files\Git\git-bash.exe" --cd="{originalProject}"`
@@ -296,26 +298,36 @@ Parse additional arguments after `list`:
      已打开新终端窗口，位于: {originalProject}
 
      请在新终端中执行：
+     unset CLAUDECODE
      claude --resume {sessionId}
      ```
    - **Fallback** (if Git Bash not found): `cmd /c start cmd /k "cd /d {originalProject}"`
 
    **Option C — Show command only**:
-   - Display in a code block:
+   - Display in a code block for **PowerShell**:
      ```
      会话: {name} ({category})
      项目: {originalProject}
 
      请在新终端中执行：
-     cd "{originalProject}" && claude --resume {sessionId}
+     cd "{originalProject}"
+     Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue
+     claude --resume {sessionId}
+     ```
+   - Or for **Bash/Git Bash**:
+     ```
+     cd "{originalProject}" && unset CLAUDECODE && claude --resume {sessionId}
      ```
 
 ### Notes
 
+- **CRITICAL: Clear `CLAUDECODE` env var before resuming.** VSCode new windows and terminals inherit environment variables from the parent process. If the parent had an active Claude Code session, the `CLAUDECODE` env var is set, causing "Error: Claude Code cannot be launched inside another Claude Code session". Always clear it first:
+  - **PowerShell**: `Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue`
+  - **Bash/Git Bash**: `unset CLAUDECODE`
 - The `code` command opens a new VSCode window — it does NOT affect the current window
 - Git Bash's `--cd=` flag sets the starting directory for the new window
-- The user still needs to manually type `claude --resume {sessionId}` in the new window's terminal — there is no reliable way to auto-execute commands in a newly opened terminal
-- If Windows Terminal (`wt`) is available, prefer it: `wt -d "{originalProject}" cmd /k "claude --resume {sessionId}"` (this CAN auto-execute)
+- The user still needs to manually type the resume commands in the new window's terminal
+- If Windows Terminal (`wt`) is available, prefer it: `wt -d "{originalProject}" cmd /k "set CLAUDECODE= && claude --resume {sessionId}"` (this CAN auto-execute)
 
 ---
 
