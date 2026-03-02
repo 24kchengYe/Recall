@@ -271,40 +271,73 @@ Parse additional arguments after `list`:
    - Compare with `originalProject` from `_meta.json`
    - **Same project**: just tell user to exit and run `claude --resume {sessionId}`
    - **Different project**: proceed to step 7
-7. **Ask user for resume method** via `AskUserQuestion`:
-   - **Option A: "VSCode 新窗口打开项目"** — Opens a new VSCode window at the project, user resumes in its terminal
-   - **Option B: "新终端窗口"** — Opens a new Git Bash / terminal window at the project
-   - **Option C: "只显示命令"** — Just show the command to copy
-8. **Execute chosen method**:
+7. **Detect current terminal environment** (BEFORE showing options):
+   - Run via Bash: `echo "TERM_PROGRAM=$TERM_PROGRAM WT_SESSION=$WT_SESSION VSCODE_INJECTION=$VSCODE_INJECTION"`
+   - Detection rules:
+     - **VSCode terminal**: `$TERM_PROGRAM == "vscode"` OR `$VSCODE_INJECTION == "1"`
+     - **Windows Terminal**: `$WT_SESSION` is non-empty (has a UUID value)
+     - **Standalone Git Bash**: `$MSYSTEM` is set but neither VSCode nor WT detected
+     - **CMD/PowerShell**: none of the above
+   - Store the detected environment for use in step 8
 
-   **Option A — VSCode new window** (recommended for VSCode users):
+8. **Ask user for resume method** via `AskUserQuestion`:
+   - Options vary based on detected environment (see below)
+   - Always include "只显示命令" as the last option
+
+   **If in VSCode terminal** → show these options:
+   - **"VSCode 新窗口打开项目"** — Opens a new VSCode window at the target project
+   - **"只显示命令"** — Show the command to copy
+
+   **If in Windows Terminal** → show these options:
+   - **"Windows Terminal 新标签页"** — Opens a new WT tab at the target project
+   - **"VSCode 新窗口打开项目"** — Opens a new VSCode window
+   - **"只显示命令"** — Show the command to copy
+
+   **If in standalone Git Bash / CMD / other** → show these options:
+   - **"VSCode 新窗口打开项目"** — Opens a new VSCode window
+   - **"新终端窗口"** — Opens a new terminal window matching the current type
+   - **"只显示命令"** — Show the command to copy
+
+9. **Execute chosen method**:
+
+   **Method: VSCode 新窗口打开项目**:
    - Run via Bash: `code "{originalProject}"`
    - This opens a NEW VSCode window at the target project
-   - Display to user (PowerShell commands for the new window's terminal):
+   - Display to user:
      ```
      已在 VSCode 中打开项目: {originalProject}
 
-     请在新窗口的终端中执行（两行都要复制）：
+     请在新窗口的终端中执行：
      Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue
      claude --resume {sessionId}
      ```
-   - **Why `Remove-Item Env:CLAUDECODE`**: VSCode new windows inherit env vars from the parent. If the parent had a Claude Code session running, `CLAUDECODE` env var is set, causing "cannot launch inside another session" error. Clearing it fixes this.
 
-   **Option B — New terminal window**:
-   - Run via Bash: `start "" "C:\Program Files\Git\git-bash.exe" --cd="{originalProject}"`
-   - This opens a new Git Bash window already `cd`'d to the project
+   **Method: Windows Terminal 新标签页**:
+   - Run via Bash: `wt -w 0 new-tab -d "{originalProject}"`
+   - This opens a new tab in the CURRENT Windows Terminal window, already cd'd to the project
    - Display to user:
      ```
-     已打开新终端窗口，位于: {originalProject}
+     已在 Windows Terminal 中打开新标签页，位于: {originalProject}
 
-     请在新终端中执行：
-     unset CLAUDECODE
-     claude --resume {sessionId}
+     请在新标签页中执行：
+     set CLAUDECODE= && claude --resume {sessionId}
      ```
-   - **Fallback** (if Git Bash not found): `cmd /c start cmd /k "cd /d {originalProject}"`
+   - Note: `wt -w 0` targets the current WT window; `new-tab -d` sets the working directory
+   - The new tab inherits the default profile (usually PowerShell or CMD)
 
-   **Option C — Show command only**:
-   - Display in a code block for **PowerShell**:
+   **Method: 新终端窗口** (standalone Git Bash):
+   - Run via Bash: `start "" "C:\Program Files\Git\git-bash.exe" --cd="{originalProject}"`
+   - Display to user:
+     ```
+     已打开新 Git Bash 窗口，位于: {originalProject}
+
+     请在新窗口中执行：
+     unset CLAUDECODE && claude --resume {sessionId}
+     ```
+
+   **Method: 只显示命令**:
+   - Detect the user's shell from step 7 and show the appropriate command:
+   - For **PowerShell** (VSCode default or Windows Terminal):
      ```
      会话: {name} ({category})
      项目: {originalProject}
@@ -314,20 +347,26 @@ Parse additional arguments after `list`:
      Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue
      claude --resume {sessionId}
      ```
-   - Or for **Bash/Git Bash**:
+   - For **Bash/Git Bash**:
      ```
      cd "{originalProject}" && unset CLAUDECODE && claude --resume {sessionId}
+     ```
+   - For **CMD**:
+     ```
+     cd /d "{originalProject}" && set CLAUDECODE= && claude --resume {sessionId}
      ```
 
 ### Notes
 
-- **CRITICAL: Clear `CLAUDECODE` env var before resuming.** VSCode new windows and terminals inherit environment variables from the parent process. If the parent had an active Claude Code session, the `CLAUDECODE` env var is set, causing "Error: Claude Code cannot be launched inside another Claude Code session". Always clear it first:
+- **CRITICAL: Clear `CLAUDECODE` env var before resuming.** Terminals inherit environment variables from the parent process. If the parent had an active Claude Code session, the `CLAUDECODE` env var is set, causing "Error: Claude Code cannot be launched inside another Claude Code session". Always clear it first:
   - **PowerShell**: `Remove-Item Env:CLAUDECODE -ErrorAction SilentlyContinue`
   - **Bash/Git Bash**: `unset CLAUDECODE`
+  - **CMD**: `set CLAUDECODE=`
+- **Environment detection is key**: always detect first, then adapt options. Never hardcode Git Bash as the default terminal.
 - The `code` command opens a new VSCode window — it does NOT affect the current window
-- Git Bash's `--cd=` flag sets the starting directory for the new window
-- The user still needs to manually type the resume commands in the new window's terminal
-- If Windows Terminal (`wt`) is available, prefer it: `wt -d "{originalProject}" cmd /k "set CLAUDECODE= && claude --resume {sessionId}"` (this CAN auto-execute)
+- `wt -w 0 new-tab -d "{path}"` opens a tab in the current Windows Terminal window
+- For Windows Terminal, the new tab inherits the default shell profile (PowerShell/CMD), so use the appropriate env var clearing syntax
+- The user still needs to manually type the resume command in the new window/tab's terminal
 
 ---
 
