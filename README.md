@@ -171,6 +171,32 @@ For those curious about the internals:
 
 Recall reads these native files and builds an index on top of them — it doesn't replace Claude Code's storage, just adds a cross-project management layer. When `sessions-index.json` is stale, Recall falls back to filesystem modification times for reliable session detection.
 
+## Changelog
+
+### v1.4.0 — 2026-03-02
+
+- **fix**: Use PowerShell syntax for Windows Terminal resume command (previously used CMD syntax)
+- **fix**: Add `$LOCALAPPDATA` fallback when `wt` is not in PATH
+- **feat**: Auto-detect terminal environment (VS Code, Windows Terminal, plain terminal) for resume
+- **fix**: Clear `CLAUDECODE` env var before resume to prevent nested session errors
+
+### v1.3.0 — 2026-03-02
+
+- **docs**: Rewrite README — position Recall between Claude Code and OpenClaw
+- **feat**: Improve save reliability and cross-project resume
+
+### v1.2.0 — 2026-03-01
+
+- **feat**: Add `/recall browse` interactive hierarchical navigation
+- **feat**: Enhance `/recall list` with search, recent, and stats subcommands
+
+### v1.0.0 — 2026-03-01
+
+- **feat**: Initial release
+- Cross-project session save, load, resume, rename, move
+- Central session index with category-based organization
+- Filesystem-first session detection
+
 ## License
 
 MIT
