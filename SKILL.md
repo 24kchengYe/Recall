@@ -5,9 +5,9 @@ description: |
   manage conversations across different projects and directories.
 
   Trigger on /recall command or these specific phrases:
-  - "/recall", "/recall save", "/recall list", "/recall load", "/recall resume", "/recall rename", "/recall move", "/recall manage", "/recall browse"
-  - "recall save", "recall list", "recall load", "recall resume", "recall rename", "recall move", "recall browse"
-  - "recall 保存", "recall 列出", "recall 加载", "recall 恢复", "recall 重命名", "recall 移动", "recall 浏览"
+  - "/recall", "/recall save", "/recall list", "/recall load", "/recall resume", "/recall rename", "/recall move", "/recall manage", "/recall browse", "/recall history"
+  - "recall save", "recall list", "recall load", "recall resume", "recall rename", "recall move", "recall browse", "recall history"
+  - "recall 保存", "recall 列出", "recall 加载", "recall 恢复", "recall 重命名", "recall 移动", "recall 浏览", "recall 历史"
 
   Do NOT trigger on generic phrases like "save session" or "保存会话" alone — only when "recall" is explicitly mentioned or /recall is used.
 ---
@@ -18,12 +18,13 @@ Recall is a centralized session management system for Claude Code. It solves the
 
 ## Architecture
 
-**Central directory = Management index layer (mapping + categorization)**
+**Central directory = Management index layer (mapping + categorization + version history)**
 
 - The central directory (default: `D:\claude-sessions\`) stores metadata + backup copies of sessions
 - Each session has a `_meta.json` (pointing to the original file) and a `.jsonl` backup
 - Sessions are organized into user-defined categories (学习, 代码, 论文, etc.)
 - Rename syncs bidirectionally: both the central index and the original project's sessions-index.json
+- **Git versioning**: The central directory is a git repository. Every save/rename/move operation auto-commits, providing full version history for all sessions. This also serves as a safeguard against Claude Code's context compaction — frequent saves preserve complete conversation content even after compaction truncates the live session.
 
 ## Important Notes
 
@@ -80,6 +81,7 @@ Parse the ARGUMENTS value to determine which command to execute:
 - `move` → **Move Category**
 - `manage` → **Manage Categories**
 - `browse` → **Interactive Browse** (visual hierarchical navigation)
+- `history` → **Version History** (view/compare/rollback git-versioned snapshots)
 
 If ARGUMENTS doesn't match any command, treat it as a natural language query and infer the closest command, then confirm with the user.
 
@@ -95,6 +97,7 @@ options:
   - "save — 保存当前会话到中央目录"
   - "list — 列出所有已保存的会话"
   - "browse — 可视化交互浏览（类别→会话→操作）"
+  - "history — 查看会话版本历史（对比/回滚）"
   - "load — 加载历史会话作为参考上下文"
   - "resume — 从中央目录恢复一个会话"
   - "rename — 重命名已保存的会话"
@@ -145,6 +148,7 @@ options:
      - Skip name/category selection — reuse existing name and category
      - Overwrite the `.jsonl` backup with the latest version: `cp` source → existing `backupFile` path
      - Update `_meta.json`: refresh `modified` timestamp, `messageCount`, and `saved` timestamp
+     - **Git commit**: run `cd "{basePath}" && git add "{category}/{name}.jsonl" "{category}/{name}_meta.json" && git commit -m "update: {name} ({category}) - {messageCount}条消息"`
      - Report: "已自动更新备份: {name} ({category})"
      - **Done** — skip steps 4 and 5
    - **If not found (first save)** → continue to step 4
@@ -162,6 +166,7 @@ options:
      - If entry exists: update its `summary` field to the user-defined name
      - If entry does NOT exist (stale index): **add a new entry** to the entries array with all available fields (sessionId, fullPath, summary, messageCount, firstPrompt, created, modified, projectPath, etc.)
      - Write back `sessions-index.json`
+   - **Git commit**: run `cd "{basePath}" && git add "{category}/{name}.jsonl" "{category}/{name}_meta.json" && git commit -m "add: {name} ({category}) - 新会话, {messageCount}条消息"`
    - Report success with the save location
 
 ### Key Details
@@ -392,6 +397,7 @@ Parse additional arguments after `list`:
       - Find the entry matching `sessionId`
       - Update its `summary` field to the new name
       - Write back the file
+   d. **Git commit**: run `cd "{basePath}" && git add -A && git commit -m "rename: {old_name} → {new_name} ({category})"`
 4. Confirm success
 
 ---
@@ -409,7 +415,8 @@ Parse additional arguments after `list`:
    mv "{basePath}/{oldCategory}/{name}.jsonl" "{basePath}/{newCategory}/{name}.jsonl"
    ```
 5. Update `_meta.json`: change `category` and `backupFile` fields
-6. Confirm success
+6. **Git commit**: run `cd "{basePath}" && git add -A && git commit -m "move: {name} 从 {oldCategory} → {newCategory}"`
+7. Confirm success
 
 ---
 
@@ -504,6 +511,106 @@ Layer 1: Category Overview → Layer 2: Session List → Layer 3: Session Detail
 - All AskUserQuestion calls use `multiSelect: false` (single selection)
 - Session data is read once at the start and cached for the browse session
 - If the user types "Other" at any point, treat it as exit/cancel
+
+---
+
+## Command 9: Version History (`/recall history`)
+
+View, compare, and rollback to any previous version of a saved session. Powered by git versioning of the central directory.
+
+### Prerequisites
+
+- The central directory (`{basePath}`) must be a git repository
+- If not initialized: run `cd "{basePath}" && git init && git add -A && git commit -m "init: 初始化 Recall 中央目录"` first
+- Git auto-commit is built into save/rename/move commands, so history accumulates automatically
+
+### Workflow
+
+1. **List sessions** (same as list command, abbreviated) and let user select one
+2. **Get version history** for the selected session:
+   ```bash
+   cd "{basePath}" && git log --oneline --format="%h %ai %s" -- "{category}/{name}.jsonl"
+   ```
+   This returns all commits that touched this session's `.jsonl` file.
+3. **Parse and display** the version list via `AskUserQuestion`:
+   - **question**: Include a formatted version table:
+     ```
+     📜 {name} — 版本历史 ({N}个版本)
+     ─────────────────
+     | # | 版本 | 时间 | 说明 |
+     |---|------|------|------|
+     | 1 | a3f2b1c | 2026-03-03 17:45 | update: ECCV论文 - 4897条消息 (当前) |
+     | 2 | d8e4f5a | 2026-03-02 20:00 | update: ECCV论文 - 3200条消息 |
+     | 3 | 7c3e8a1 | 2026-03-02 13:00 | add: ECCV论文 - 新会话 |
+     ```
+   - **options**:
+     - **"对比两个版本"** — Compare two versions side by side
+     - **"回滚到某个版本"** — Restore a historical version as current
+     - **"仅查看"** — Just view the history, no action
+4. **Execute chosen action**:
+
+### Action: 对比两个版本
+
+1. Ask user to select two version numbers (e.g., "1 和 3" or "最新 和 上一个")
+   - Use `AskUserQuestion` with options like: "最新 vs 上一个", "选择两个版本号 (Other)"
+2. Run git diff between the two commits:
+   ```bash
+   cd "{basePath}" && git diff {older_hash} {newer_hash} -- "{category}/{name}.jsonl"
+   ```
+3. The raw diff of `.jsonl` is hard to read (JSON lines). Instead, extract a human-readable summary:
+   - Count lines added/removed: `git diff --stat {older_hash} {newer_hash} -- "{category}/{name}.jsonl"`
+   - For a rough message count diff: `git show {older_hash}:"{category}/{name}_meta.json"` to get old messageCount, compare with current
+4. Display summary:
+   ```
+   📊 版本对比: {name}
+   版本 {older_hash} ({older_date}) → {newer_hash} ({newer_date})
+   消息数: {old_count} → {new_count} (+{diff}条新消息)
+   文件大小变化: +{KB} KB
+   ```
+5. Optionally ask if user wants to load either version's content (jump to Load Context with a specific git version)
+
+### Action: 回滚到某个版本
+
+1. Ask user which version to rollback to (show version list as options)
+2. **Confirm with user**: "确认要将 {name} 回滚到版本 {hash} ({date})？当前版本不会丢失，可以随时恢复。"
+3. Execute rollback:
+   ```bash
+   cd "{basePath}" && git checkout {target_hash} -- "{category}/{name}.jsonl" "{category}/{name}_meta.json"
+   ```
+4. **Auto-commit the rollback** so it's tracked in history:
+   ```bash
+   cd "{basePath}" && git add "{category}/{name}.jsonl" "{category}/{name}_meta.json" && git commit -m "rollback: {name} ({category}) → 版本 {target_hash}"
+   ```
+5. Report success:
+   ```
+   已回滚 {name} 到版本 {target_hash} ({date})
+   原版本仍在 git 历史中，可随时通过 /recall history 恢复。
+   ```
+
+### Action: 加载历史版本内容
+
+This is an extension of the Load Context command (Command 3) that loads a specific historical version instead of the current one.
+
+1. User selects a version from the history list
+2. Extract the historical `.jsonl` to a temp file:
+   ```bash
+   cd "{basePath}" && git show {target_hash}:"{category}/{name}.jsonl" > /tmp/recall_history_temp.jsonl
+   ```
+3. Run the session_utils.py extract command on the temp file (same as Command 3)
+4. Present the content with a version indicator:
+   ```
+   --- 参考会话: {name} (版本 {hash}, {date}) ---
+   [User] ...
+   [Assistant] ...
+   --- 参考会话结束 ---
+   ```
+
+### Notes
+
+- All versions are permanent — rollback creates a new commit, never deletes history
+- If git is not initialized in basePath, tell the user and offer to initialize it
+- The `_meta.json` is also versioned, so messageCount/timestamps are accurate per version
+- For sessions with many versions (>10), paginate the version list (show 10 per page)
 
 ---
 

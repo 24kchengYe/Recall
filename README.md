@@ -70,6 +70,7 @@ Recall creates a **centralized session index** — a management layer that maps 
 | `/recall resume` | Find and resume a session from any project |
 | `/recall rename` | Rename a session (bidirectional sync with original project) |
 | `/recall move` | Move session to a different category |
+| `/recall history` | View version history, compare, or rollback a session |
 | `/recall manage` | Manage categories (add, remove, view stats) |
 
 ## Core Features
@@ -93,6 +94,13 @@ Visual, clickable hierarchical navigation designed for hundreds of sessions:
 1. **Layer 1**: Category overview (with session counts)
 2. **Layer 2**: Session list within a category (paginated, 3 per page)
 3. **Layer 3**: Session detail + executable actions (load, resume, rename, move)
+
+### Version History & Anti-Compaction (`/recall history`)
+The central directory is a git repository. Every `/recall save` auto-commits a snapshot, giving you full version history:
+- **View history**: See every save point with timestamp and message count
+- **Compare versions**: See how a conversation grew between two saves
+- **Rollback**: Restore any historical version — the current version is never lost
+- **Anti-compaction**: Claude Code compresses long conversations, permanently losing early messages. Frequent `/recall save` captures the full conversation before compaction happens. If compaction truncates your session, rollback to a pre-compaction snapshot to recover the complete history.
 
 ### Search & Statistics
 - **Search**: Find sessions by keyword across name, summary, first prompt, and tags
@@ -121,6 +129,8 @@ When you rename a session in Recall, it updates **both** the central index and t
 | Load past context | No | Yes | Yes (persistent) |
 | Resume from any directory | No | Yes | Yes |
 | Central backup | No | Yes | Yes |
+| Version history & rollback | No | Yes (git) | No |
+| Anti-compaction | No | Yes | Partial |
 | Sandboxed execution | Yes | Yes | **No** |
 | Human approval required | Yes | Yes | **No** |
 | No background processes | Yes | Yes | **No** |
@@ -150,6 +160,7 @@ git clone https://github.com/24kchengYe/recall.git %USERPROFILE%\.claude\skills\
 
 - Claude Code (VS Code, JetBrains, Cursor, Windsurf, or terminal CLI)
 - Python 3.8+ (for the helper script that parses `.jsonl` session files)
+- Git (for version history — auto-initialized on first save)
 
 ## Configuration
 
@@ -172,6 +183,12 @@ For those curious about the internals:
 Recall reads these native files and builds an index on top of them — it doesn't replace Claude Code's storage, just adds a cross-project management layer. When `sessions-index.json` is stale, Recall falls back to filesystem modification times for reliable session detection.
 
 ## Changelog
+
+### v1.5.0 — 2026-03-03
+
+- **feat**: Git-based version history — central directory is now a git repo, every save/rename/move auto-commits
+- **feat**: Add `/recall history` command — view version timeline, compare versions, rollback to any snapshot
+- **feat**: Anti-compaction — frequent saves preserve full conversation content before Claude Code compresses it
 
 ### v1.4.0 — 2026-03-02
 
