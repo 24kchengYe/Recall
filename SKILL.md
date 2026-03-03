@@ -553,21 +553,43 @@ View, compare, and rollback to any previous version of a saved session. Powered 
 
 1. Ask user to select two version numbers (e.g., "1 和 3" or "最新 和 上一个")
    - Use `AskUserQuestion` with options like: "最新 vs 上一个", "选择两个版本号 (Other)"
-2. Run git diff between the two commits:
+2. Extract both versions to temp files:
    ```bash
-   cd "{basePath}" && git diff {older_hash} {newer_hash} -- "{category}/{name}.jsonl"
+   cd "{basePath}" && git show {older_hash}:"{category}/{name}.jsonl" > /tmp/recall_diff_old.jsonl
+   cd "{basePath}" && git show {newer_hash}:"{category}/{name}.jsonl" > /tmp/recall_diff_new.jsonl
    ```
-3. The raw diff of `.jsonl` is hard to read (JSON lines). Instead, extract a human-readable summary:
-   - Count lines added/removed: `git diff --stat {older_hash} {newer_hash} -- "{category}/{name}.jsonl"`
-   - For a rough message count diff: `git show {older_hash}:"{category}/{name}_meta.json"` to get old messageCount, compare with current
-4. Display summary:
+3. Run the diff command via the Python helper:
+   ```bash
+   python "C:\Users\ASUS\.claude\skills\recall\scripts\session_utils.py" diff /tmp/recall_diff_old.jsonl /tmp/recall_diff_new.jsonl --mode brief|detailed --max-messages 50
    ```
-   📊 版本对比: {name}
-   版本 {older_hash} ({older_date}) → {newer_hash} ({newer_date})
-   消息数: {old_count} → {new_count} (+{diff}条新消息)
-   文件大小变化: +{KB} KB
+4. The script uses message UUID matching to identify:
+   - **新增记录**: Messages in the newer version but not the older (= incremental conversation)
+   - **被压缩记录**: Messages in the older version but not the newer (= lost to compaction)
+   - **Compaction detection**: Automatically detects `summary`/`compact_boundary` markers
+5. Display the script's output, which includes:
    ```
-5. Optionally ask if user wants to load either version's content (jump to Load Context with a specific git version)
+   === 版本差异分析 ===
+   旧版本: 1500 条记录 ({older_date})
+   新版本: 3200 条记录 ({newer_date})
+   新增:   1700 条记录
+   移除:   0 条记录
+
+   --- 新增对话内容 ---
+   [User] 帮我看一下这个bug...
+   [Assistant] 我来检查一下代码...
+   ...
+   ```
+   If compaction is detected:
+   ```
+   ⚠ 检测到 compact（上下文压缩）: 部分早期消息已被摘要替代
+
+   --- 被 compact 压缩的早期对话 ---
+   [User] 最早的一些对话内容...
+   [Assistant] 这些内容在新版本中已被压缩...
+   ```
+6. After displaying diff, ask if user wants to:
+   - Load either version's full content as context
+   - Rollback to the older version
 
 ### Action: 回滚到某个版本
 
@@ -636,6 +658,9 @@ python session_utils.py stats <base_dir>
 
 # Check if original session files still exist
 python session_utils.py check <base_dir>
+
+# Compare two versions of a session (extract incremental content + detect compaction)
+python session_utils.py diff <old_jsonl_path> <new_jsonl_path> [--mode brief|detailed] [--max-messages 50] [--max-chars 500]
 ```
 
 ### When to use the helper vs. direct tools

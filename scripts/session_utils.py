@@ -446,6 +446,190 @@ def check_sessions(base_dir: str) -> str:
     return "\n".join(lines)
 
 
+def _parse_jsonl_entries(path: Path) -> list:
+    """Parse a .jsonl file and return list of (line_number, entry_dict) tuples."""
+    entries = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    entries.append((i, entry))
+                except json.JSONDecodeError:
+                    continue
+    except Exception:
+        pass
+    return entries
+
+
+def _entry_id(entry: dict) -> str:
+    """Extract a unique identifier for a jsonl entry.
+
+    Priority: uuid > message.id > hash of content.
+    """
+    if entry.get("uuid"):
+        return entry["uuid"]
+    msg = entry.get("message", {})
+    if isinstance(msg, dict) and msg.get("id"):
+        return msg["id"]
+    # Fallback: hash the entry type + first 200 chars of content
+    entry_type = entry.get("type", "")
+    content = str(entry.get("message", {}).get("content", ""))[:200]
+    return f"{entry_type}:{hash(content)}"
+
+
+def _is_compact_marker(entry: dict) -> bool:
+    """Check if an entry is a compaction boundary marker."""
+    return entry.get("type") == "summary" or "compact_boundary" in str(entry)
+
+
+def _extract_readable(entries: list, mode: str = "brief", max_chars: int = 500) -> list:
+    """Convert parsed entries to readable (role, text) tuples.
+
+    Args:
+        entries: list of (line_number, entry_dict) tuples
+        mode: 'brief' or 'detailed'
+        max_chars: max chars per message
+    Returns:
+        list of (role, text) tuples
+    """
+    messages = []
+    for _, entry in entries:
+        entry_type = entry.get("type", "")
+        msg = entry.get("message", {})
+
+        if entry_type == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                text = content.strip()
+                if not text.startswith("{") and "tool_use_id" not in text:
+                    messages.append(("User", _truncate(text, max_chars)))
+            elif isinstance(content, list):
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                combined = "\n".join(text_parts).strip()
+                if combined:
+                    messages.append(("User", _truncate(combined, max_chars)))
+
+        elif entry_type == "assistant":
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                messages.append(("Assistant", _truncate(content.strip(), max_chars)))
+            elif isinstance(content, list):
+                text_parts = []
+                tool_notes = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                        elif part.get("type") == "tool_use" and mode == "detailed":
+                            note = _summarize_tool_use(part.get("name", ""), part.get("input", {}))
+                            if note:
+                                tool_notes.append(note)
+                combined = "\n".join(text_parts).strip()
+                if tool_notes:
+                    combined += "\n" + "\n".join(f"  [{note}]" for note in tool_notes)
+                if combined:
+                    messages.append(("Assistant", _truncate(combined, max_chars)))
+
+        elif entry_type == "summary":
+            summary_text = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+            if isinstance(summary_text, str) and summary_text.strip():
+                messages.append(("System/Compact", _truncate(summary_text.strip(), max_chars)))
+
+    return messages
+
+
+def diff_sessions(old_path: str, new_path: str, mode: str = "brief",
+                  max_messages: int = 50, max_chars: int = 500) -> str:
+    """Compare two versions of a session and extract incremental content.
+
+    Handles both normal growth and compaction scenarios.
+
+    Args:
+        old_path: Path to the older .jsonl version
+        new_path: Path to the newer .jsonl version
+        mode: 'brief' or 'detailed'
+        max_messages: Max messages to show
+        max_chars: Max chars per message
+    """
+    old_p = Path(_normalize_path(old_path))
+    new_p = Path(_normalize_path(new_path))
+
+    if not old_p.exists():
+        return f"Error: Old file not found: {old_path}"
+    if not new_p.exists():
+        return f"Error: New file not found: {new_path}"
+
+    old_entries = _parse_jsonl_entries(old_p)
+    new_entries = _parse_jsonl_entries(new_p)
+
+    # Build ID sets
+    old_ids = set(_entry_id(e) for _, e in old_entries)
+    new_ids = set(_entry_id(e) for _, e in new_entries)
+
+    # Find incremental (in new but not in old)
+    added_ids = new_ids - old_ids
+    added_entries = [(ln, e) for ln, e in new_entries if _entry_id(e) in added_ids]
+
+    # Find lost (in old but not in new — likely compacted)
+    lost_ids = old_ids - new_ids
+    lost_entries = [(ln, e) for ln, e in old_entries if _entry_id(e) in lost_ids]
+
+    # Detect compaction
+    has_compaction = any(_is_compact_marker(e) for _, e in new_entries)
+
+    # Stats
+    lines = []
+    lines.append("=== 版本差异分析 ===")
+    lines.append("")
+    lines.append(f"旧版本: {len(old_entries)} 条记录")
+    lines.append(f"新版本: {len(new_entries)} 条记录")
+    lines.append(f"新增:   {len(added_entries)} 条记录")
+    lines.append(f"移除:   {len(lost_entries)} 条记录")
+    if has_compaction:
+        lines.append("⚠ 检测到 compact（上下文压缩）: 部分早期消息已被摘要替代")
+    lines.append("")
+
+    # Show added messages (incremental content)
+    if added_entries:
+        added_readable = _extract_readable(added_entries, mode, max_chars)
+        if added_readable:
+            lines.append("--- 新增对话内容 ---")
+            lines.append("")
+            for i, (role, text) in enumerate(added_readable):
+                if i >= max_messages:
+                    lines.append(f"... 还有 {len(added_readable) - max_messages} 条消息未显示")
+                    break
+                lines.append(f"[{role}] {text}")
+                lines.append("")
+        else:
+            lines.append("新增记录为工具调用/系统消息，无可读文本内容。")
+    else:
+        lines.append("两个版本之间无新增对话内容。")
+
+    # Show compacted messages if any
+    if lost_entries and has_compaction:
+        lost_readable = _extract_readable(lost_entries, mode, max_chars)
+        if lost_readable:
+            lines.append("")
+            lines.append("--- 被 compact 压缩的早期对话 ---")
+            lines.append("")
+            for i, (role, text) in enumerate(lost_readable):
+                if i >= max_messages:
+                    lines.append(f"... 还有 {len(lost_readable) - max_messages} 条消息未显示")
+                    break
+                lines.append(f"[{role}] {text}")
+                lines.append("")
+
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Recall Session Utils")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
@@ -483,6 +667,17 @@ def main():
     check_parser = subparsers.add_parser("check", help="Check original file existence")
     check_parser.add_argument("base_dir", help="Path to the central sessions directory")
 
+    # diff subcommand
+    diff_parser = subparsers.add_parser("diff", help="Compare two versions of a session")
+    diff_parser.add_argument("old_path", help="Path to the older .jsonl version")
+    diff_parser.add_argument("new_path", help="Path to the newer .jsonl version")
+    diff_parser.add_argument("--mode", choices=["brief", "detailed"], default="brief",
+                             help="Extraction mode (default: brief)")
+    diff_parser.add_argument("--max-messages", type=int, default=50,
+                             help="Maximum messages to show (default: 50)")
+    diff_parser.add_argument("--max-chars", type=int, default=500,
+                             help="Maximum characters per message (default: 500)")
+
     args = parser.parse_args()
 
     if args.command == "extract":
@@ -495,6 +690,9 @@ def main():
         print(stats_sessions(args.base_dir))
     elif args.command == "check":
         print(check_sessions(args.base_dir))
+    elif args.command == "diff":
+        print(diff_sessions(args.old_path, args.new_path, args.mode,
+                            args.max_messages, args.max_chars))
     else:
         parser.print_help()
         sys.exit(1)
