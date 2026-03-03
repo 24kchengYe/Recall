@@ -197,7 +197,8 @@ options:
 ### Sub-argument Routing
 
 Parse additional arguments after `list`:
-- `list` (no sub-arg) → Original behavior (choose category → table)
+- `list` (no sub-arg) → Default behavior (choose category → table with summary preview)
+- `list --detail` → Detailed multi-line output per session (full summary + tags + project)
 - `list search <keyword>` → Search across all sessions
 - `list recent [N]` → Show most recent N sessions (default 10)
 - `list stats` → Show statistics overview
@@ -212,14 +213,23 @@ Parse additional arguments after `list`:
 4. Read each `_meta.json` and collect metadata
 5. Display as a formatted table sorted by `modified` (newest first):
 
+**Default mode** (摘要预览列替代来源项目):
 ```
-| # | 名称 | 类别 | 来源项目 | 消息数 | 最后修改 | 预览 |
-|---|------|------|----------|--------|----------|------|
-| 1 | BSAS论文修改 | 论文 | G:\Research... | 42 | 2026-02-28 | 首先Expert Rubrics... |
-| 2 | Python调试 | 代码 | D:\python... | 15 | 2026-02-27 | 帮我看一下这个bug... |
+#    名称                      类别     消息数  最后修改     摘要预览
+1    ECCV论文202603             论文     4897   2026-03-03   论文写作: ECCV论文结构性修改...
+2    Python调试                 代码     15     2026-02-27   问题修复: 帮我看一下这个bug...
+```
+
+**Detailed mode** (`--detail`, multi-line per session):
+```
+1    ECCV论文202603             论文     4897   2026-03-03
+     论文写作: ECCV论文结构性修改——bib修复、Related Work同步。涉及 main.tex, references.bib
+     标签: latex, 论文写作 | 来源: G:\Research...
 ```
 
 6. After showing the table, ask user if they want to perform an action on any session (load, resume, rename, move)
+
+Note: Summary quality depends on reindex. After upgrading to the new summary format, run `/recall reindex` to regenerate all summaries from the existing `.jsonl` backups.
 
 ### Workflow: Search (`/recall list search <keyword>`)
 
@@ -820,8 +830,8 @@ The Python helper script is located at:
 # Extract readable content from a session
 python session_utils.py extract <jsonl_path> [--mode brief|detailed] [--max-messages 30] [--max-chars 500]
 
-# List all sessions in the central directory
-python session_utils.py list <base_dir> [--category <name>] [--sort modified|name|count] [--limit N]
+# List all sessions in the central directory (default: summary preview column)
+python session_utils.py list <base_dir> [--category <name>] [--sort modified|name|count] [--limit N] [--detail]
 
 # Search sessions by keyword
 python session_utils.py search <base_dir> <keyword> [--category <name>]

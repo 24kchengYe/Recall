@@ -209,7 +209,8 @@ def _load_all_sessions(base_path: Path, category: str = None) -> list:
     return sessions
 
 
-def list_sessions(base_dir: str, category: str = None, sort_by: str = "modified", limit: int = 0) -> str:
+def list_sessions(base_dir: str, category: str = None, sort_by: str = "modified",
+                   limit: int = 0, detail: bool = False) -> str:
     """List all saved sessions in the central directory.
 
     Args:
@@ -217,6 +218,7 @@ def list_sessions(base_dir: str, category: str = None, sort_by: str = "modified"
         category: Optional category filter
         sort_by: Sort key — 'modified' (default), 'name', or 'count'
         limit: Maximum number of sessions to show (0 = unlimited)
+        detail: If True, show multi-line detail per session (full summary + tags + project)
     """
     base_path = Path(_normalize_path(base_dir))
     if not base_path.exists():
@@ -241,23 +243,51 @@ def list_sessions(base_dir: str, category: str = None, sort_by: str = "modified"
     if limit > 0:
         sessions = sessions[:limit]
 
-    # Format as table
     lines = []
-    lines.append(f"{'#':<4} {'名称':<25} {'类别':<8} {'消息数':<6} {'最后修改':<12} {'来源项目':<30}")
-    lines.append("-" * 90)
 
-    for i, s in enumerate(sessions, 1):
-        name = _truncate(s.get("name", "unnamed"), 24)
-        cat = s.get("category", "?")
-        count = s.get("messageCount", "?")
-        modified = s.get("modified", "?")
-        if isinstance(modified, str) and len(modified) >= 10:
-            modified = modified[:10]
-        project = s.get("originalProject", "?")
-        # Shorten project path
-        if len(project) > 29:
-            project = "..." + project[-26:]
-        lines.append(f"{i:<4} {name:<25} {cat:<8} {str(count):<6} {modified:<12} {project:<30}")
+    if detail:
+        # Detailed mode: multi-line per session
+        lines.append(f"{'#':<4} {'名称':<25} {'类别':<8} {'消息数':<6} {'最后修改':<12}")
+        lines.append("-" * 60)
+
+        for i, s in enumerate(sessions, 1):
+            name = _truncate(s.get("name", "unnamed"), 24)
+            cat = s.get("category", "?")
+            count = s.get("messageCount", "?")
+            modified = s.get("modified", "?")
+            if isinstance(modified, str) and len(modified) >= 10:
+                modified = modified[:10]
+            lines.append(f"{i:<4} {name:<25} {cat:<8} {str(count):<6} {modified:<12}")
+            # Summary line
+            summary = s.get("summary", "")
+            if summary:
+                lines.append(f"     {summary}")
+            # Tags + project line
+            tags = s.get("tags", [])
+            project = s.get("originalProject", "?")
+            if len(project) > 40:
+                project = "..." + project[-37:]
+            tag_str = ", ".join(tags) if tags else ""
+            if tag_str and project:
+                lines.append(f"     标签: {tag_str} | 来源: {project}")
+            elif project:
+                lines.append(f"     来源: {project}")
+            lines.append("")  # blank line between sessions
+    else:
+        # Default mode: summary preview replaces project column
+        lines.append(f"{'#':<4} {'名称':<25} {'类别':<8} {'消息数':<6} {'最后修改':<12} {'摘要预览':<30}")
+        lines.append("-" * 90)
+
+        for i, s in enumerate(sessions, 1):
+            name = _truncate(s.get("name", "unnamed"), 24)
+            cat = s.get("category", "?")
+            count = s.get("messageCount", "?")
+            modified = s.get("modified", "?")
+            if isinstance(modified, str) and len(modified) >= 10:
+                modified = modified[:10]
+            summary = s.get("summary", "")
+            preview = _truncate(summary, 30) if summary else "-"
+            lines.append(f"{i:<4} {name:<25} {cat:<8} {str(count):<6} {modified:<12} {preview:<30}")
 
     total_info = f"\n共 {len(sessions)} 个会话"
     if limit > 0:
@@ -305,7 +335,7 @@ def search_sessions(base_dir: str, keyword: str, category: str = None) -> str:
     lines = []
     lines.append(f"搜索 '{keyword}' — 找到 {len(matches)} 个匹配:")
     lines.append("")
-    lines.append(f"{'#':<4} {'名称':<25} {'类别':<8} {'消息数':<6} {'最后修改':<12} {'来源项目':<30}")
+    lines.append(f"{'#':<4} {'名称':<25} {'类别':<8} {'消息数':<6} {'最后修改':<12} {'摘要预览':<30}")
     lines.append("-" * 90)
 
     for i, s in enumerate(matches, 1):
@@ -315,10 +345,9 @@ def search_sessions(base_dir: str, keyword: str, category: str = None) -> str:
         modified = s.get("modified", "?")
         if isinstance(modified, str) and len(modified) >= 10:
             modified = modified[:10]
-        project = s.get("originalProject", "?")
-        if len(project) > 29:
-            project = "..." + project[-26:]
-        lines.append(f"{i:<4} {name:<25} {cat:<8} {str(count):<6} {modified:<12} {project:<30}")
+        summary = s.get("summary", "")
+        preview = _truncate(summary, 30) if summary else "-"
+        lines.append(f"{i:<4} {name:<25} {cat:<8} {str(count):<6} {modified:<12} {preview:<30}")
 
     return "\n".join(lines)
 
@@ -557,31 +586,15 @@ def _extract_readable(entries: list, mode: str = "brief", max_chars: int = 500) 
     return messages
 
 
-def summarize_session(jsonl_path: str, max_summary_chars: int = 300) -> dict:
-    """Generate a structured summary and tags from a session .jsonl file.
+def _extract_session_data(entries: list) -> dict:
+    """Extract structured data (user messages, tool uses, files) from parsed entries.
 
-    Pure rule-based extraction — no LLM API calls.
-
-    Args:
-        jsonl_path: Path to the .jsonl session file
-        max_summary_chars: Maximum characters for the summary text
-
-    Returns:
-        dict with 'summary' (str) and 'tags' (list of str)
+    Returns dict with keys: user_messages, assistant_messages, tool_uses, file_counts
     """
-    path = Path(_normalize_path(jsonl_path))
-    if not path.exists():
-        return {"summary": "", "tags": []}
-
-    entries = _parse_jsonl_entries(path)
-    if not entries:
-        return {"summary": "", "tags": []}
-
-    # Extract all user messages, assistant messages, and tool uses
     user_messages = []
     assistant_messages = []
     tool_uses = []
-    files_touched = set()
+    file_counts = Counter()
 
     for _, entry in entries:
         entry_type = entry.get("type", "")
@@ -614,123 +627,364 @@ def summarize_session(jsonl_path: str, max_summary_chars: int = 300) -> dict:
                         for key in ("file_path", "path", "pattern"):
                             val = tool_input.get(key, "")
                             if val and isinstance(val, str) and ("/" in val or "\\" in val):
-                                # Extract just the filename
                                 fname = val.replace("\\", "/").split("/")[-1]
                                 if "." in fname and len(fname) < 80:
-                                    files_touched.add(fname)
+                                    file_counts[fname] += 1
                         # Extract from bash commands
                         if tool_name == "Bash":
                             cmd = tool_input.get("command", "")
-                            # Look for file paths in commands
                             for m in re.findall(r'[\w./\\-]+\.\w{1,5}', cmd):
                                 fname = m.replace("\\", "/").split("/")[-1]
                                 if len(fname) < 80:
-                                    files_touched.add(fname)
+                                    file_counts[fname] += 1
             elif isinstance(content, str) and content.strip():
                 assistant_messages.append(content.strip())
 
-    # Build summary parts
-    summary_parts = []
+    return {
+        "user_messages": user_messages,
+        "assistant_messages": assistant_messages,
+        "tool_uses": tool_uses,
+        "file_counts": file_counts,
+    }
 
-    # 1. First user message (topic indicator)
-    if user_messages:
-        first_msg = user_messages[0][:100]
-        summary_parts.append(f"用户请求: {first_msg}")
 
-    # 2. Discussion topics from later messages
-    if len(user_messages) > 3:
-        # Sample a few key user messages to understand topic evolution
-        mid_msgs = user_messages[len(user_messages)//3:2*len(user_messages)//3]
-        if mid_msgs:
-            mid_sample = mid_msgs[0][:60]
-            summary_parts.append(f"中间讨论: {mid_sample}")
+# Markers that indicate a continuation session or non-user-intent messages
+_SKIP_PATTERNS = [
+    "This session is being continued",
+    "This is a continuation",
+    "/recall",
+    "<command-message>",
+    "<system-reminder>",
+    "session_utils.py",
+    "recall_search.py",
+    "recall_autosave.py",
+    "[Request interrupted",
+    "<local-command-caveat>",
+]
 
-    # 3. Files touched
-    if files_touched:
-        file_list = sorted(files_touched)[:10]  # Limit to 10 files
-        summary_parts.append(f"涉及文件: {', '.join(file_list)}")
 
-    # 4. Tool usage summary
-    if tool_uses:
-        tool_counts = Counter(tool_uses)
-        top_tools = tool_counts.most_common(5)
-        tool_str = ", ".join(f"{name}({count})" for name, count in top_tools)
-        summary_parts.append(f"工具使用: {tool_str}")
+def _extract_topic(user_messages: list) -> str:
+    """Extract core topic from user messages, skipping boilerplate.
 
-    # 5. Last assistant response snippet
-    if assistant_messages:
-        last_msg = assistant_messages[-1][:80]
-        summary_parts.append(f"最后回复: {last_msg}")
+    Returns a concise topic string (<=80 chars).
+    """
+    # Find the first substantive user message
+    topic_msg = ""
+    for msg in user_messages:
+        if any(pat in msg for pat in _SKIP_PATTERNS):
+            continue
+        # Skip very short system-like messages
+        if len(msg.strip()) < 5:
+            continue
+        topic_msg = msg.strip()
+        break
 
-    # Combine summary
-    summary = " | ".join(summary_parts)
-    if len(summary) > max_summary_chars:
-        summary = summary[:max_summary_chars] + "..."
+    if not topic_msg:
+        # Fallback: try ALL messages if early ones are all skipped
+        for msg in user_messages:
+            stripped = msg.strip()
+            if len(stripped) >= 10 and not any(pat in stripped for pat in _SKIP_PATTERNS):
+                topic_msg = stripped
+                break
+    if not topic_msg:
+        return "未知主题"
 
-    # Generate tags
-    tags = _extract_tags(user_messages, assistant_messages, tool_uses, files_touched)
+    # Normalize line endings
+    topic_msg = topic_msg.replace("\r\n", "\n").replace("\r", "\n")
+
+    # Strip common prefixes
+    _PREFIX_PATTERNS = [
+        "Implement the following plan:",
+        "Implement the following plan：",
+        "implement the plan:",
+    ]
+    for prefix in _PREFIX_PATTERNS:
+        if topic_msg.lower().startswith(prefix.lower()):
+            topic_msg = topic_msg[len(prefix):].strip()
+            break
+
+    # Strip leading markdown headers (# anything)
+    topic_msg = re.sub(r'^#+\s*', '', topic_msg).strip()
+
+    if not topic_msg:
+        return "未知主题"
+
+    # Short messages: use as-is
+    if len(topic_msg) <= 60:
+        return topic_msg
+
+    # Long messages: extract first sentence (use earliest valid separator)
+    best_idx = len(topic_msg)
+    for sep in ["。", ".\n", "\n", ". "]:
+        idx = topic_msg.find(sep)
+        if 10 < idx < 120 and idx < best_idx:
+            best_idx = idx
+    if best_idx < len(topic_msg):
+        return topic_msg[:best_idx].strip()
+
+    # Fallback: truncate
+    return topic_msg[:80].strip()
+
+
+def _classify_activity(user_messages: list, tool_uses: list, file_counts: Counter) -> list:
+    """Classify session activity into 1-2 labels based on tools, files, and keywords.
+
+    Returns list of Chinese activity labels (max 2).
+    """
+    labels = []
+    tool_set = set(tool_uses)
+    # Only use first 30 user messages for keyword classification (avoid noise in long sessions)
+    early_messages = user_messages[:30]
+    all_user_text = " ".join(early_messages).lower()
+    file_exts = set()
+    for fname in file_counts:
+        if "." in fname:
+            file_exts.add("." + fname.rsplit(".", 1)[-1].lower())
+
+    # Rule-based classification (priority order)
+    tex_files = file_exts & {".tex", ".bib", ".cls", ".sty"}
+    code_files = file_exts & {".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".cpp",
+                               ".c", ".go", ".rs", ".rb", ".php", ".vue", ".svelte"}
+    has_edit = ("Edit" in tool_set or "Write" in tool_set)
+
+    # 论文写作
+    if has_edit and tex_files:
+        labels.append("论文写作")
+    # 代码开发
+    elif has_edit and code_files:
+        labels.append("代码开发")
+
+    # Bug fix / debugging (require 3+ keyword hits to avoid false positives)
+    bug_keywords = ["bug", "error", "fix", "修复", "报错", "出错", "traceback", "exception"]
+    bug_count = sum(all_user_text.count(kw) for kw in bug_keywords)
+    if bug_count >= 3:
+        labels.append("问题修复")
+
+    # 简历修改 (word boundary; only override if no strong file-type signal already)
+    cv_count = sum(len(re.findall(pat, all_user_text))
+                   for pat in [r"简历", r"\bcv\b", r"\bresume\b", r"\bcurriculum\b"])
+    if cv_count >= 3 and not (tex_files or code_files):
+        labels = ["简历修改"]
+
+    # 资料检索
+    if "WebSearch" in tool_set or "WebFetch" in tool_set:
+        if not labels:
+            labels.append("资料检索")
+
+    # 配置/部署
+    config_keywords = ["docker", "deploy", "部署", "配置", "安装", "setup"]
+    if any(kw in all_user_text for kw in config_keywords) and not labels:
+        labels.append("配置部署")
+
+    # Git operations
+    git_keywords = ["git", "commit", "merge", "rebase", "pr", "pull request"]
+    if any(kw in all_user_text for kw in git_keywords) and not labels:
+        labels.append("Git操作")
+
+    # 数据分析
+    data_keywords = ["数据", "data", "分析", "analysis", "统计", "可视化", "plot", "chart"]
+    data_exts = file_exts & {".csv", ".xlsx", ".ipynb", ".parquet"}
+    if (data_exts or any(kw in all_user_text for kw in data_keywords)) and not labels:
+        labels.append("数据分析")
+
+    # Fallback
+    if not labels:
+        if has_edit:
+            labels.append("代码编辑")
+        elif tool_uses:
+            labels.append("技术讨论")
+        else:
+            labels.append("对话")
+
+    return labels[:2]
+
+
+def _extract_key_files(file_counts: Counter) -> list:
+    """Extract key files with strict filtering.
+
+    Returns up to 5 filenames sorted by frequency.
+    """
+    _KNOWN_EXTS = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".vue", ".svelte",
+        ".java", ".cpp", ".c", ".h", ".go", ".rs", ".rb", ".php", ".swift",
+        ".html", ".css", ".scss", ".less",
+        ".tex", ".bib", ".cls", ".sty",
+        ".md", ".txt", ".rst",
+        ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+        ".sql", ".sh", ".bat", ".ps1",
+        ".ipynb", ".csv", ".xlsx",
+        ".xml", ".svg", ".r", ".m",
+        ".dockerfile", ".makefile",
+    }
+    _EXCLUDE_PATTERNS = {"_meta.json", ".jsonl", ".pyc", ".pyo", ".DS_Store"}
+
+    filtered = []
+    for fname, count in file_counts.most_common():
+        # Must be at least 4 chars (e.g. "a.py")
+        if len(fname) < 4:
+            continue
+        # Must have a known extension
+        if "." not in fname:
+            continue
+        ext = "." + fname.rsplit(".", 1)[-1].lower()
+        if ext not in _KNOWN_EXTS:
+            continue
+        # Exclude internal/temp files
+        if any(pat in fname for pat in _EXCLUDE_PATTERNS):
+            continue
+        # Exclude glob patterns
+        if "*" in fname or "?" in fname:
+            continue
+        filtered.append(fname)
+        if len(filtered) >= 5:
+            break
+
+    return filtered
+
+
+def _is_continuation(user_messages: list) -> bool:
+    """Check if this is a continuation session."""
+    if not user_messages:
+        return False
+    first = user_messages[0]
+    return ("This session is being continued" in first
+            or "This is a continuation" in first)
+
+
+def _build_natural_summary(topic: str, activities: list, key_files: list,
+                           user_messages: list, max_chars: int = 300) -> str:
+    """Build a natural language summary from extracted components.
+
+    Format varies by session type:
+    - Short session (<10 messages): just the topic
+    - Continuation: "延续会话 — {activity}: {topic}"
+    - Normal: "{activity}: {topic}。主要涉及 {files}。"
+    """
+    is_cont = _is_continuation(user_messages)
+    is_short = len(user_messages) < 10
+    activity_str = "、".join(activities)
+
+    if is_short and not is_cont:
+        summary = f"{activity_str}: {topic}" if activities else topic
+    elif is_cont:
+        summary = f"延续会话 — {activity_str}: {topic}"
+    else:
+        summary = f"{activity_str}: {topic}"
+        if key_files:
+            files_str = ", ".join(key_files)
+            summary += f"。涉及 {files_str}"
+
+    if len(summary) > max_chars:
+        summary = summary[:max_chars - 3] + "..."
+
+    return summary
+
+
+def summarize_session(jsonl_path: str, max_summary_chars: int = 300) -> dict:
+    """Generate a natural language summary and tags from a session .jsonl file.
+
+    Pure rule-based extraction — no LLM API calls.
+
+    Args:
+        jsonl_path: Path to the .jsonl session file
+        max_summary_chars: Maximum characters for the summary text
+
+    Returns:
+        dict with 'summary' (str) and 'tags' (list of str)
+    """
+    path = Path(_normalize_path(jsonl_path))
+    if not path.exists():
+        return {"summary": "", "tags": []}
+
+    entries = _parse_jsonl_entries(path)
+    if not entries:
+        return {"summary": "", "tags": []}
+
+    data = _extract_session_data(entries)
+    user_messages = data["user_messages"]
+    assistant_messages = data["assistant_messages"]
+    tool_uses = data["tool_uses"]
+    file_counts = data["file_counts"]
+
+    if not user_messages:
+        return {"summary": "", "tags": []}
+
+    topic = _extract_topic(user_messages)
+    activities = _classify_activity(user_messages, tool_uses, file_counts)
+    key_files = _extract_key_files(file_counts)
+    summary = _build_natural_summary(topic, activities, key_files,
+                                     user_messages, max_summary_chars)
+
+    tags = _extract_tags(user_messages, assistant_messages, tool_uses,
+                         file_counts, activities)
 
     return {"summary": summary, "tags": tags}
 
 
-def _extract_tags(user_msgs: list, asst_msgs: list, tool_uses: list, files: set) -> list:
-    """Extract meaningful tags from session content.
+def _extract_tags(user_msgs: list, asst_msgs: list, tool_uses: list,
+                  file_counts: Counter, activities: list = None) -> list:
+    """Extract precise tags from session content.
 
-    Tags are extracted from:
-    - File extensions (programming language indicators)
-    - Tool usage patterns
-    - Common keywords in user messages
+    Stricter than before:
+    - Language tags: file must appear 2+ times
+    - Domain tags: keyword must appear 2+ times in user messages
+    - Activity tags: reuse _classify_activity() results
+    Target: 4-8 tags.
     """
     tags = set()
 
-    # File extension → language tags
+    # File extension → language tags (require 2+ occurrences)
     ext_to_lang = {
         ".py": "python", ".js": "javascript", ".ts": "typescript",
         ".jsx": "react", ".tsx": "react", ".vue": "vue",
         ".java": "java", ".cpp": "c++", ".c": "c", ".rs": "rust",
         ".go": "go", ".rb": "ruby", ".php": "php", ".swift": "swift",
         ".html": "html", ".css": "css", ".scss": "css",
-        ".md": "markdown", ".tex": "latex", ".bib": "latex",
-        ".json": "json", ".yaml": "yaml", ".yml": "yaml",
+        ".tex": "latex", ".bib": "latex",
         ".sql": "sql", ".sh": "shell", ".bat": "shell",
         ".ipynb": "jupyter",
     }
-    for f in files:
-        ext = "." + f.rsplit(".", 1)[-1].lower() if "." in f else ""
+    # Aggregate counts by language
+    lang_counts = Counter()
+    for fname, count in file_counts.items():
+        if "." not in fname:
+            continue
+        ext = "." + fname.rsplit(".", 1)[-1].lower()
         if ext in ext_to_lang:
-            tags.add(ext_to_lang[ext])
+            lang_counts[ext_to_lang[ext]] += count
 
-    # Tool usage patterns → activity tags
-    tool_set = set(tool_uses)
-    if "Edit" in tool_set or "Write" in tool_set:
-        tags.add("coding")
-    if "Bash" in tool_set:
-        tags.add("terminal")
-    if "Agent" in tool_set:
-        tags.add("agent")
-    if "WebSearch" in tool_set or "WebFetch" in tool_set:
-        tags.add("web-research")
+    for lang, count in lang_counts.items():
+        if count >= 2:
+            tags.add(lang)
 
-    # Keyword extraction from user messages
+    # Activity tags from classification
+    if activities:
+        activity_to_tag = {
+            "论文写作": "论文写作", "代码开发": "编程", "问题修复": "调试",
+            "简历修改": "简历", "资料检索": "检索", "配置部署": "部署",
+            "Git操作": "git", "数据分析": "数据分析",
+            "代码编辑": "编程", "技术讨论": "讨论",
+        }
+        for act in activities:
+            if act in activity_to_tag:
+                tags.add(activity_to_tag[act])
+
+    # Domain keyword tags (require 2+ occurrences in user text)
     all_user_text = " ".join(user_msgs).lower()
     keyword_map = {
-        "bug": "debugging", "fix": "debugging", "error": "debugging", "debug": "debugging",
-        "test": "testing", "pytest": "testing", "unittest": "testing",
-        "refactor": "refactoring", "重构": "refactoring",
-        "论文": "paper", "paper": "paper", "arxiv": "paper",
-        "git": "git", "commit": "git", "merge": "git",
+        "论文": "论文", "paper": "论文", "arxiv": "论文",
+        "test": "测试", "pytest": "测试", "unittest": "测试",
+        "refactor": "重构", "重构": "重构",
         "docker": "docker", "container": "docker",
         "api": "api", "endpoint": "api",
-        "database": "database", "sql": "database", "db": "database",
-        "deploy": "deployment", "部署": "deployment",
-        "设计": "design", "design": "design",
-        "review": "code-review", "审查": "code-review",
+        "database": "数据库", "sql": "数据库",
+        "设计": "设计", "design": "设计",
     }
     for keyword, tag in keyword_map.items():
-        if keyword in all_user_text:
+        if all_user_text.count(keyword) >= 2:
             tags.add(tag)
 
-    return sorted(tags)[:15]  # Limit to 15 tags
+    return sorted(tags)[:8]
 
 
 def diff_sessions(old_path: str, new_path: str, mode: str = "brief",
@@ -840,6 +1094,8 @@ def main():
                              help="Sort by: modified (default), name, or count")
     list_parser.add_argument("--limit", type=int, default=0,
                              help="Maximum sessions to show (0 = unlimited)")
+    list_parser.add_argument("--detail", action="store_true",
+                             help="Show detailed multi-line output per session")
 
     # search subcommand
     search_parser = subparsers.add_parser("search", help="Search sessions by keyword")
@@ -877,7 +1133,7 @@ def main():
     if args.command == "extract":
         print(extract_session(args.jsonl_path, args.mode, args.max_messages, args.max_chars))
     elif args.command == "list":
-        print(list_sessions(args.base_dir, args.category, args.sort, args.limit))
+        print(list_sessions(args.base_dir, args.category, args.sort, args.limit, args.detail))
     elif args.command == "search":
         print(search_sessions(args.base_dir, args.keyword, args.category))
     elif args.command == "stats":
