@@ -791,13 +791,16 @@ Regenerate summaries and rebuild the search index for all saved sessions. Essent
 ### Workflow
 
 1. Read `_config.json` to get basePath and categories
-2. **Phase 1: Regenerate summaries** for all sessions:
+2. **Phase 1: Regenerate summaries** for sessions that need it:
    - For each `_meta.json` in all categories:
-     - Find the corresponding `.jsonl` backup file
+     - Read existing `summary` and `tags` from `_meta.json`
+     - **Skip if existing summary is good**: If `summary` is non-empty AND >= 30 characters, **preserve it** and skip to the next session. Report: "跳过 (已有摘要): {name}"
+     - Only for sessions with empty/short summary: Find the corresponding `.jsonl` backup file
      - Run: `python session_utils.py summarize "{backupFile}"`
      - Parse the JSON output (summary + tags)
      - Update `_meta.json` with the new `summary` and `tags` fields
      - Report progress: "正在处理: {name} ({category})..."
+   - **Force mode**: If the user explicitly says "强制重建" or passes `--force`, overwrite ALL summaries regardless of existing content
 3. **Phase 2: Rebuild search index**:
    - Run: `python recall_search.py index "{basePath}"`
    - This creates/updates `_index.sqlite` with all session data and embeddings
@@ -815,7 +818,8 @@ Regenerate summaries and rebuild the search index for all saved sessions. Essent
 - This can take a while for large collections (each session needs JSONL parsing)
 - If OpenAI API key is configured, each session also gets an embedding (~$0.02/百万token, almost free)
 - Without API key, only keyword search will work (still useful)
-- Safe to run multiple times — it overwrites previous index data
+- Safe to run multiple times — search index is always rebuilt, but existing good summaries are preserved (unless `--force`)
+- **Important**: Auto-generated summaries from compacted sessions may be worse than manually written ones. The skip logic protects against this regression.
 
 ---
 
