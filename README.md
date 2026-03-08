@@ -1,3 +1,4 @@
+\![Visitors](https://visitor-badge.laobi.icu/badge?page_id=24kchengYe.claude-code-recall)
 # Recall — Never Lose a Claude Code Conversation Again
 
 > **Cross-project session manager with category organization, version history, and anti-compaction backup — without sacrificing Claude Code's security model.**
