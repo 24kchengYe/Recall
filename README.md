@@ -1,6 +1,10 @@
-# Recall — Never Lose a Claude Code Conversation Again
+# Recall
 
-> **Cross-project session manager with category organization, version history, and anti-compaction backup — without sacrificing Claude Code's security model.**
+**Your AI conversations, organized and searchable. Never lose a session again.**
+
+> Cross-project session manager for Claude Code — browse, search, version control, and anti-compaction backup, without sacrificing Claude Code's security model.
+
+> See also: [**MemoMind**](https://github.com/24kchengYe/MemoMind) — the AI-facing counterpart that gives your AI *persistent memory* across sessions.
 
 ## Why Recall?
 
@@ -136,6 +140,21 @@ No more hunting through directories to find where a conversation lives.
 ### Bidirectional Rename
 When you rename a session in Recall, it updates **both** the central index and the original project's `sessions-index.json`. No desync between what Recall shows and what `/resume` shows.
 
+## Recall + MemoMind: Two Sides of the Same Coin
+
+AI memory serves two audiences — you and your AI. Recall and [MemoMind](https://github.com/24kchengYe/MemoMind) cover both:
+
+| | Recall | [MemoMind](https://github.com/24kchengYe/MemoMind) |
+|---|---|---|
+| **Memory for** | **You** (the human) | The AI |
+| **Purpose** | Browse, search, manage conversation history | AI remembers your preferences and context |
+| **Format** | Full conversation archives (JSONL, human-readable) | Structured facts + knowledge graph + vectors |
+| **Interaction** | You run `/recall save`, `/recall search`, `/recall load` | AI autonomously calls `retain` / `recall` / `reflect` |
+| **Storage** | Files + SQLite index (Windows native) | PostgreSQL + pgvector (WSL) |
+| **Key value** | You never lose a conversation | AI gets smarter over time |
+
+**They're complementary.** Recall preserves the *full context* so you can review what happened. MemoMind distills the *essential knowledge* so the AI can act on it. Use both for the complete experience.
+
 ## Recall vs. OpenClaw vs. Built-in
 
 | Capability | Built-in `/resume` | Recall | OpenClaw |
@@ -166,17 +185,17 @@ When you rename a session in Recall, it updates **both** the central index and t
 ### From Skills CLI (Recommended)
 
 ```bash
-npx skills add 24kchengYe/claude-code-recall
+npx skills add 24kchengYe/Recall
 ```
 
 ### Manual Installation
 
 ```bash
 # macOS / Linux
-git clone https://github.com/24kchengYe/claude-code-recall.git ~/.claude/skills/recall
+git clone https://github.com/24kchengYe/Recall.git ~/.claude/skills/recall
 
 # Windows
-git clone https://github.com/24kchengYe/claude-code-recall.git %USERPROFILE%\.claude\skills\recall
+git clone https://github.com/24kchengYe/Recall.git %USERPROFILE%\.claude\skills\recall
 ```
 
 ## Requirements
@@ -250,3 +269,9 @@ Recall reads these native files and builds an index on top of them — it doesn'
 ## License
 
 MIT
+
+---
+
+![Visitors](https://visitor-badge.laobi.icu/badge?page_id=24kchengYe.Recall)
+
+[![Star History Chart](https://api.star-history.com/svg?repos=24kchengYe/Recall&type=Date)](https://star-history.com/#24kchengYe/Recall&Date)
