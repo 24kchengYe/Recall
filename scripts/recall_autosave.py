@@ -242,30 +242,15 @@ def _git_commit(base_path: Path, files: list, message: str):
         pass
 
 
-def main():
-    # Read hook input from stdin
-    try:
-        raw = sys.stdin.read()
-        if raw.strip():
-            hook_data = json.loads(raw)
-        else:
-            hook_data = {}
-    except (json.JSONDecodeError, Exception):
-        hook_data = {}
-
-    # Get session info from hook data or environment
-    session_id = hook_data.get("session_id", "")
-    cwd = hook_data.get("cwd", "") or os.getcwd()
-    transcript_path = hook_data.get("transcript_path", "")
-
+def _do_autosave(session_id, cwd, transcript_path):
+    """Actual autosave logic — runs in a detached background process."""
     # Find base path
     base_path = _find_base_path()
     if not base_path.exists():
-        sys.exit(0)  # Central directory doesn't exist, nothing to do
+        return
 
     # Determine current session
     if transcript_path:
-        # Use transcript_path directly if provided
         tp = Path(_normalize_path(transcript_path))
         if tp.exists():
             session_id = tp.stem
@@ -273,7 +258,6 @@ def main():
         else:
             session_id, current_jsonl = _find_current_session_file(cwd)
     elif session_id:
-        # Try to find the file from session_id
         current_jsonl = None
         for proj_dir in CLAUDE_PROJECTS_DIR.iterdir():
             if not proj_dir.is_dir():
@@ -283,39 +267,32 @@ def main():
                 current_jsonl = candidate
                 break
         if not current_jsonl:
-            sys.exit(0)
+            return
     else:
         session_id, current_jsonl = _find_current_session_file(cwd)
 
     if not session_id or not current_jsonl or not current_jsonl.exists():
-        sys.exit(0)  # Can't determine session, skip
+        return
 
     # Check if this session was previously saved
     meta_path, meta = _find_saved_session(base_path, session_id)
     if not meta_path or not meta:
-        sys.exit(0)  # Not previously saved, silently skip
+        return
 
-    # Auto-update the saved session
     category = meta.get("category", "")
     name = meta.get("name", "")
     backup_file = meta.get("backupFile", "")
 
     if not backup_file:
-        sys.exit(0)
+        return
 
     backup_path = Path(_normalize_path(backup_file))
 
     try:
-        # Copy current .jsonl to backup location
         shutil.copy2(str(current_jsonl), str(backup_path))
-
-        # Update message count
         msg_count = _count_messages(current_jsonl)
-
-        # Generate/update summary
         summary_data = _generate_summary(current_jsonl)
 
-        # Update meta
         now = datetime.now(timezone.utc).isoformat()
         meta["modified"] = now
         meta["saved"] = now
@@ -328,11 +305,8 @@ def main():
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
 
-        # Sync Recall name back to Claude's sessions-index.json
-        # (prevents Claude Code from overwriting the user-defined name)
         _sync_name_to_sessions_index(session_id, name, cwd)
 
-        # Git commit
         rel_backup = backup_path.relative_to(base_path)
         rel_meta = meta_path.relative_to(base_path)
         _git_commit(
@@ -340,11 +314,82 @@ def main():
             [str(rel_backup), str(rel_meta)],
             f"autosave: {name} ({category}) - {msg_count}条消息"
         )
-
     except Exception as e:
-        # Silently fail — autosave should never disrupt the user
         print(f"[recall autosave] warning: {e}", file=sys.stderr)
-        sys.exit(0)
+
+
+def _parse_background_args():
+    """Parse CLI args when running in --background mode."""
+    session_id = ""
+    cwd = os.getcwd()
+    transcript_path = ""
+    args = sys.argv[1:]
+    i = 0
+    while i < len(args):
+        if args[i] == "--session-id" and i + 1 < len(args):
+            session_id = args[i + 1]
+            i += 2
+        elif args[i] == "--cwd" and i + 1 < len(args):
+            cwd = args[i + 1]
+            i += 2
+        elif args[i] == "--transcript-path" and i + 1 < len(args):
+            transcript_path = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    return session_id, cwd, transcript_path
+
+
+def main():
+    # If called with --background flag, we ARE the detached process
+    if "--background" in sys.argv:
+        session_id, cwd, transcript_path = _parse_background_args()
+        _do_autosave(session_id, cwd, transcript_path)
+        return
+
+    # Read hook input from stdin (must happen in foreground before detaching)
+    try:
+        raw = sys.stdin.read()
+        if raw.strip():
+            hook_data = json.loads(raw)
+        else:
+            hook_data = {}
+    except (json.JSONDecodeError, Exception):
+        hook_data = {}
+
+    session_id = hook_data.get("session_id", "")
+    cwd = hook_data.get("cwd", "") or os.getcwd()
+    transcript_path = hook_data.get("transcript_path", "")
+
+    # Otherwise, spawn a detached background process and exit immediately.
+    # This prevents double Ctrl+C from cancelling the hook.
+    script = os.path.abspath(__file__)
+    cmd = [
+        sys.executable, script, "--background",
+        "--session-id", session_id,
+        "--cwd", cwd,
+        "--transcript-path", transcript_path,
+    ]
+
+    try:
+        # On Windows/MSYS: CREATE_NO_WINDOW + DETACHED_PROCESS
+        creation_flags = 0
+        if platform.system() == "Windows" or "MSYS" in os.environ.get("MSYSTEM", ""):
+            CREATE_NO_WINDOW = 0x08000000
+            DETACHED_PROCESS = 0x00000008
+            creation_flags = CREATE_NO_WINDOW | DETACHED_PROCESS
+
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creation_flags,
+            start_new_session=True,
+        )
+    except Exception:
+        # Fallback: just run inline if detach fails
+        _do_autosave(session_id, cwd, transcript_path)
 
 
 if __name__ == "__main__":
